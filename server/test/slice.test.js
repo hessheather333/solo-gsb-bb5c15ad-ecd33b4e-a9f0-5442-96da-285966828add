@@ -228,6 +228,54 @@ test("buildSlice supports RFC 6901 escaping in pointers", () => {
   assert.deepEqual(out.samples, [{ "a/b": "x" }]);
 });
 
+test("buildSlice keeps a selected __proto__ field in the schema and the projection", () => {
+  // JSON.parse creates "__proto__" as an own data property, like the HTTP body parser does.
+  const samples = [
+    JSON.parse('{"__proto__": {"x": 1}, "id": 1}'),
+    JSON.parse('{"__proto__": {"x": 2}, "id": 2}'),
+  ];
+  const { schema } = inferSchema(samples);
+  const out = buildSlice({ schema, samples, pointers: ["/properties/__proto__"] });
+  assert.deepEqual(Object.keys(out.schema.properties), ["__proto__"]);
+  assert.deepEqual(out.schema.required, ["__proto__"]);
+  assert.equal(out.schema.properties.__proto__.properties.x.type, "integer");
+  assert.equal(out.fieldCount, 2); // __proto__ + x
+  assert.deepEqual(out.samples, [
+    JSON.parse('{"__proto__": {"x": 1}}'),
+    JSON.parse('{"__proto__": {"x": 2}}'),
+  ]);
+  assert.ok(Object.prototype.hasOwnProperty.call(out.samples[0], "__proto__"));
+});
+
+test("buildSlice projects a scalar __proto__ value as an own key", () => {
+  const samples = [JSON.parse('{"__proto__": "a", "id": 1}')];
+  const { schema } = inferSchema(samples);
+  const out = buildSlice({ schema, samples, pointers: ["/properties/__proto__"] });
+  assert.equal(out.schema.properties.__proto__.type, "string");
+  assert.deepEqual(out.samples, [JSON.parse('{"__proto__": "a"}')]);
+});
+
+test("buildSlice keeps __proto__ under nested objects and array elements", () => {
+  const samples = [
+    JSON.parse('{"meta": {"__proto__": 1, "y": 2}, "list": [{"__proto__": "x", "z": 0}], "id": 1}'),
+  ];
+  const { schema } = inferSchema(samples);
+  const out = buildSlice({
+    schema,
+    samples,
+    pointers: [
+      "/properties/meta/properties/__proto__",
+      "/properties/list/items/properties/__proto__",
+    ],
+  });
+  assert.equal(out.schema.properties.meta.properties.__proto__.type, "integer");
+  assert.deepEqual(out.schema.properties.meta.required, ["__proto__"]);
+  assert.equal(out.schema.properties.list.items.properties.__proto__.type, "string");
+  assert.deepEqual(out.samples, [
+    JSON.parse('{"meta": {"__proto__": 1}, "list": [{"__proto__": "x"}]}'),
+  ]);
+});
+
 test("buildSlice adds the 2020-12 $schema marker when the input lacks it", () => {
   const out = buildSlice({
     schema: { type: "object", properties: { a: { type: "string" } } },

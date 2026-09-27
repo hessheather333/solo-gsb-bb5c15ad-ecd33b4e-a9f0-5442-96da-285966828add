@@ -36,7 +36,7 @@
 
 const Ajv2020 = require("ajv/dist/2020").default;
 const { parsePointer } = require("./variant");
-const { escapePointer } = require("./infer");
+const { escapePointer, setOwn } = require("./infer");
 
 const MAX_SAMPLES = 200;
 const MAX_POINTERS = 20;
@@ -122,13 +122,14 @@ function sliceNode(node, trie) {
   const out = {};
   for (const [keyword, value] of Object.entries(node)) {
     if (keyword === "properties" || keyword === "required" || keyword === "items") continue;
-    out[keyword] = clone(value);
+    setOwn(out, keyword, clone(value));
   }
   if (isPlainSchema(node.properties)) {
     const properties = {};
     for (const [key, child] of Object.entries(node.properties)) {
       const childTrie = trie.props.get(key);
-      if (childTrie) properties[key] = sliceNode(child, childTrie);
+      // setOwn: a "__proto__" field must survive as a regular own key.
+      if (childTrie) setOwn(properties, key, sliceNode(child, childTrie));
     }
     if (Object.keys(properties).length > 0) out.properties = properties;
     if (Array.isArray(node.required)) {
@@ -161,7 +162,8 @@ function projectValue(value, trie) {
     const out = {};
     for (const key of Object.keys(value)) {
       const childTrie = trie.props.get(key);
-      if (childTrie) out[key] = projectValue(value[key], childTrie);
+      // setOwn: a "__proto__" key must be projected as a regular own key.
+      if (childTrie) setOwn(out, key, projectValue(value[key], childTrie));
     }
     return out;
   }

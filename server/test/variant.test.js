@@ -133,6 +133,46 @@ test("nested pointers pin const at the nested path and require every level", () 
   assert.ok(branchA.properties.meta.required.includes("v"));
 });
 
+test("__proto__ as discriminator keeps the const in every branch", () => {
+  // JSON.parse creates "__proto__" as an own data property, like the HTTP body parser does.
+  const { schema, groupCount, skipped } = buildVariantContract({
+    pointer: "/__proto__",
+    samples: [
+      JSON.parse('{"__proto__": "created", "id": 1}'),
+      JSON.parse('{"__proto__": "created", "id": 2}'),
+      JSON.parse('{"__proto__": "deleted", "id": 3, "reason": "x"}'),
+    ],
+  });
+  assert.equal(groupCount, 2);
+  assert.deepEqual(skipped, []);
+  const [created, deleted] = schema.oneOf;
+  assert.equal(created.properties.__proto__.const, "created");
+  assert.equal(deleted.properties.__proto__.const, "deleted");
+  assert.deepEqual([...created.required].sort(), ["__proto__", "id"]);
+  assert.deepEqual([...deleted.required].sort(), ["__proto__", "id", "reason"]);
+  // The const survives the JSON round-trip as an own key...
+  const revived = JSON.parse(JSON.stringify(schema));
+  assert.equal(revived.oneOf[0].properties.__proto__.const, "created");
+  // ...and no prototype was mutated along the way.
+  assert.equal(Object.getPrototypeOf(created.properties), Object.prototype);
+  assert.equal({}.const, undefined);
+});
+
+test("__proto__ as a nested discriminator segment is pinned and required", () => {
+  const { schema } = buildVariantContract({
+    pointer: "/meta/__proto__",
+    samples: [
+      JSON.parse('{"meta": {"__proto__": "a", "v": 1}, "id": 1}'),
+      JSON.parse('{"meta": {"__proto__": "b", "v": 2}, "id": 2}'),
+    ],
+  });
+  const [branchA, branchB] = schema.oneOf;
+  assert.equal(branchA.properties.meta.properties.__proto__.const, "a");
+  assert.equal(branchB.properties.meta.properties.__proto__.const, "b");
+  assert.ok(branchA.required.includes("meta"));
+  assert.ok(branchA.properties.meta.required.includes("__proto__"));
+});
+
 test("escaped pointer segments address keys containing ~ and /", () => {
   const { schema, groupCount, skipped } = buildVariantContract({
     pointer: "/a~0b/c~1d",

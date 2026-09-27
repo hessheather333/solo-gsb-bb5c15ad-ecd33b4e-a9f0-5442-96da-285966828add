@@ -48,6 +48,20 @@ test("POST /api/infer rejects missing samples", async () => {
   assert.match(data.error, /samples/);
 });
 
+test("POST /api/infer keeps a __proto__ field as a regular key over HTTP", async () => {
+  const { status, data } = await post("/api/infer", {
+    samples: [
+      JSON.parse('{"__proto__": "a", "id": 1}'),
+      JSON.parse('{"__proto__": "b", "id": 2}'),
+    ],
+  });
+  assert.equal(status, 200);
+  assert.deepEqual(data.schema.required, ["__proto__", "id"]);
+  assert.deepEqual(Object.keys(data.schema.properties), ["__proto__", "id"]);
+  assert.equal(data.schema.properties.__proto__.type, "string");
+  assert.deepEqual(data.paths["/properties/__proto__"], ["#/0/__proto__", "#/1/__proto__"]);
+});
+
 test("POST /api/validate reports JSON Pointers for errors", async () => {
   const { data: inferred } = await post("/api/infer", {
     samples: [{ id: 1, user: { name: "a" } }],

@@ -86,3 +86,42 @@ test("keys needing JSON Pointer escaping are escaped in sample paths", () => {
 test("rejects empty sample list", () => {
   assert.throws(() => inferSchema([]), TypeError);
 });
+
+test("__proto__ is kept as a regular own key: type, required and paths", () => {
+  // JSON.parse creates "__proto__" as an own data property, like the HTTP body parser does.
+  const samples = [
+    JSON.parse('{"__proto__": "a", "id": 1}'),
+    JSON.parse('{"__proto__": "b", "id": 2}'),
+  ];
+  const { schema, paths } = inferSchema(samples);
+  assert.deepEqual(schema.required, ["__proto__", "id"]);
+  assert.deepEqual(Object.keys(schema.properties), ["__proto__", "id"]);
+  assert.equal(schema.properties.__proto__.type, "string");
+  assert.deepEqual(paths["/properties/__proto__"], ["#/0/__proto__", "#/1/__proto__"]);
+  // The key is an own property, not a prototype mutation...
+  assert.equal(Object.getPrototypeOf(schema.properties), Object.prototype);
+  // ...and it survives the JSON round-trip the API performs.
+  const revived = JSON.parse(JSON.stringify(schema));
+  assert.ok(Object.prototype.hasOwnProperty.call(revived.properties, "__proto__"));
+  assert.equal(revived.properties.__proto__.type, "string");
+});
+
+test("__proto__ is kept inside nested objects and array elements", () => {
+  const { schema } = inferSchema([
+    JSON.parse('{"meta": {"__proto__": 1}, "list": [{"__proto__": "x"}]}'),
+    JSON.parse('{"meta": {"__proto__": 2}, "list": [{"__proto__": "y"}]}'),
+  ]);
+  assert.equal(schema.properties.meta.properties.__proto__.type, "integer");
+  assert.deepEqual(schema.properties.meta.required, ["__proto__"]);
+  assert.equal(schema.properties.list.items.properties.__proto__.type, "string");
+  assert.deepEqual(schema.properties.list.items.required, ["__proto__"]);
+});
+
+test("__proto__ missing from one sample stays optional but keeps its type", () => {
+  const { schema } = inferSchema([
+    JSON.parse('{"__proto__": "a", "id": 1}'),
+    JSON.parse('{"id": 2}'),
+  ]);
+  assert.deepEqual(schema.required, ["id"]);
+  assert.equal(schema.properties.__proto__.type, "string");
+});

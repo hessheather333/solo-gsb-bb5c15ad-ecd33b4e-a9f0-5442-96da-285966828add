@@ -38,6 +38,20 @@ function escapePointer(segment) {
   return String(segment).replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
+/**
+ * Set an own data property, even for the magic key "__proto__": a plain
+ * `obj[key] = value` assignment would mutate the prototype instead, and the
+ * field would silently vanish from Object.keys and the serialized JSON.
+ */
+function setOwn(obj, key, value) {
+  Object.defineProperty(obj, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
 function sortTypes(typeSet) {
   return [...typeSet].sort((a, b) => TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b));
 }
@@ -86,7 +100,7 @@ function inferNode(observations, schemaPointer, pathMap) {
         }
       }
       const childPointer = `${schemaPointer}/properties/${escapePointer(key)}`;
-      properties[key] = inferNode(childObservations, childPointer, pathMap);
+      setOwn(properties, key, inferNode(childObservations, childPointer, pathMap));
       // Present in every object observation -> required; missing anywhere -> optional.
       if (childObservations.length === objects.length) required.push(key);
     }
@@ -129,4 +143,4 @@ function inferSchema(samples) {
   return { schema, paths: Object.fromEntries(pathMap) };
 }
 
-module.exports = { inferSchema, typeOf, escapePointer };
+module.exports = { inferSchema, typeOf, escapePointer, setOwn };

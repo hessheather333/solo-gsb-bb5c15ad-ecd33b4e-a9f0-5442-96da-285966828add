@@ -20,7 +20,7 @@
  * with status 422 — the response still carries the grouping analysis.
  */
 
-const { inferSchema } = require("./infer");
+const { inferSchema, setOwn } = require("./infer");
 
 const MAX_SAMPLES = 200;
 
@@ -74,14 +74,19 @@ function resolvePointer(sample, segments) {
 /**
  * Pin the discriminator to the group's value inside a branch schema: walk
  * (defensively creating) the properties chain and mark every segment required,
- * then set `const` on the reached node.
+ * then set `const` on the reached node. Lookups and writes treat every
+ * segment as a plain JSON key — a "__proto__" segment must neither read
+ * through the prototype chain nor mutate a prototype.
  */
 function injectConst(schema, segments, value) {
   let node = schema;
   for (const segment of segments) {
     if (!node.properties || typeof node.properties !== "object") node.properties = {};
-    if (!node.properties[segment] || typeof node.properties[segment] !== "object") {
-      node.properties[segment] = {};
+    const child = Object.prototype.hasOwnProperty.call(node.properties, segment)
+      ? node.properties[segment]
+      : null;
+    if (child === null || typeof child !== "object") {
+      setOwn(node.properties, segment, {});
     }
     const required = new Set(Array.isArray(node.required) ? node.required : []);
     required.add(segment);
