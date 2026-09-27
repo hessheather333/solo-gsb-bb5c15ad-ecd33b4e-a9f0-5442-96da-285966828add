@@ -19,7 +19,9 @@ function createApp() {
   const app = express();
   app.use(express.json({ limit: "10mb" }));
 
-  const ajv = new Ajv2020({ allErrors: true, verbose: true, strict: false });
+  // ownProperties: required/property presence must use hasOwnProperty,
+  // otherwise a JSON key literally named "__proto__" reads as the prototype.
+  const ajv = new Ajv2020({ allErrors: true, verbose: true, strict: false, ownProperties: true });
 
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });

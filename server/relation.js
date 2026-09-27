@@ -39,13 +39,13 @@
  */
 
 const Ajv2020 = require("ajv/dist/2020").default;
-const { escapePointer } = require("./infer");
+const { escapePointer, setOwnKey } = require("./infer");
 
 const MAX_SAMPLES = 200;
 const MIN_SUPPORT = 2;
 const MAX_WITNESS_PATHS = 50;
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -570,9 +570,20 @@ function enhanceSchema({ schema, samples, ruleIds }) {
     for (const rule of rules) {
       if (rule.kind === "implication") {
         if (!isPlainSchema(node.dependentRequired)) node.dependentRequired = {};
-        const deps = new Set(node.dependentRequired[rule.a] || []);
+        // hasOwnProperty: reading "__proto__" before it was written would
+        // otherwise yield Object.prototype (truthy) and crash `new Set`.
+        const existing = Object.prototype.hasOwnProperty.call(
+          node.dependentRequired,
+          rule.a
+        )
+          ? node.dependentRequired[rule.a]
+          : [];
+        const deps = new Set(existing);
         deps.add(rule.b);
-        node.dependentRequired[rule.a] = [...deps].sort();
+        // A rule keyed "__proto__" must not hit the prototype setter; Ajv
+        // itself skips that dependentRequired name, so the rule simply stays
+        // descriptive for that edge.
+        setOwnKey(node.dependentRequired, rule.a, [...deps].sort());
       } else {
         if (!Array.isArray(node.allOf)) node.allOf = [];
         node.allOf.push({ not: { required: [rule.a, rule.b] } });

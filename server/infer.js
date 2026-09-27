@@ -38,6 +38,65 @@ function escapePointer(segment) {
   return String(segment).replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
+/**
+ * Regex source matching the literal JSON key "__proto__" and nothing else.
+ * Ajv (v8) deliberately skips a literal `properties.__proto__` entry and the
+ * default `required` presence check reads `data.__proto__` (the prototype),
+ * so schemas carry the constraint at this `patternProperties` alias as well.
+ * The normal `properties`/`required` entry stays the source of truth for the
+ * tree view, pointer resolution and every non-Ajv consumer.
+ */
+const PROTO_KEY = "__proto__";
+const PROTO_KEY_PATTERN = "^__proto__$";
+
+/** True when a JSON key needs the Ajv `patternProperties` companion. */
+function isProtoKey(key) {
+  return key === PROTO_KEY;
+}
+
+/**
+ * Store `value` under `key` on a plain object as an own data property. This
+ * is how JSON.parse treats "__proto__" too: a regular JSON key, not the
+ * prototype setter — plain assignment on that name would replace
+ * `Object.prototype` for the holder.
+ */
+function setOwnKey(target, key, value) {
+  if (key === PROTO_KEY) {
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  } else {
+    target[key] = value;
+  }
+  return target;
+}
+
+/**
+ * Keep a schema node's `patternProperties` companion for "__proto__" in sync
+ * with its `properties` entry (same subschema reference). Ajv never enforces
+ * the literal properties entry, so without this alias the field's type/const
+ * would go unchecked; adding the entry lets both describe the same rule.
+ */
+function syncProtoPattern(node) {
+  if (!node || typeof node !== "object" || !node.properties) return;
+  const protoSchema = Object.prototype.hasOwnProperty.call(node.properties, PROTO_KEY)
+    ? node.properties[PROTO_KEY]
+    : undefined;
+  if (!node.patternProperties || typeof node.patternProperties !== "object") {
+    if (protoSchema === undefined) return;
+    node.patternProperties = {};
+  }
+  if (protoSchema === undefined) {
+    delete node.patternProperties[PROTO_KEY_PATTERN];
+    if (Object.keys(node.patternProperties).length === 0) delete node.patternProperties;
+  } else {
+    node.patternProperties[PROTO_KEY_PATTERN] = protoSchema;
+  }
+}
+
 function sortTypes(typeSet) {
   return [...typeSet].sort((a, b) => TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b));
 }
@@ -73,6 +132,8 @@ function inferNode(observations, schemaPointer, pathMap) {
       }
     }
 
+    // Keys come straight from JSON samples; setOwnKey stores a literal
+    // "__proto__" as a normal own property (like JSON.parse does).
     const properties = {};
     const required = [];
     for (const key of keys) {
@@ -86,13 +147,15 @@ function inferNode(observations, schemaPointer, pathMap) {
         }
       }
       const childPointer = `${schemaPointer}/properties/${escapePointer(key)}`;
-      properties[key] = inferNode(childObservations, childPointer, pathMap);
+      const childSchema = inferNode(childObservations, childPointer, pathMap);
+      setOwnKey(properties, key, childSchema);
       // Present in every object observation -> required; missing anywhere -> optional.
       if (childObservations.length === objects.length) required.push(key);
     }
 
     schema.properties = properties;
     if (required.length > 0) schema.required = required;
+    syncProtoPattern(schema);
   }
 
   if (typeSet.has("array")) {
@@ -129,4 +192,13 @@ function inferSchema(samples) {
   return { schema, paths: Object.fromEntries(pathMap) };
 }
 
-module.exports = { inferSchema, typeOf, escapePointer };
+module.exports = {
+  inferSchema,
+  typeOf,
+  escapePointer,
+  syncProtoPattern,
+  setOwnKey,
+  isProtoKey,
+  PROTO_KEY,
+  PROTO_KEY_PATTERN,
+};

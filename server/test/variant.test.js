@@ -147,6 +147,75 @@ test("escaped pointer segments address keys containing ~ and /", () => {
   assert.equal(schema.oneOf[1].properties["a~b"].properties["c/d"].const, "y");
 });
 
+test("a __proto__ discriminator keeps the const pin on every branch", () => {
+  const samples = [
+    JSON.parse(`{"__proto__":"created","id":1}`),
+    JSON.parse(`{"__proto__":"created","id":2}`),
+    JSON.parse(`{"__proto__":"deleted","id":3}`),
+  ];
+  const result = buildVariantContract({ samples, pointer: "/__proto__" });
+  assert.equal(result.groupCount, 2);
+  assert.deepEqual(result.skipped, []);
+
+  const [created, deleted] = result.schema.oneOf;
+  assert.equal(created.properties.__proto__.const, "created");
+  assert.equal(deleted.properties.__proto__.const, "deleted");
+  assert.ok(created.required.includes("__proto__"));
+  // Ajv enforces the pin through the patternProperties alias; without it both
+  // branches would match every sample and oneOf would reject them all.
+  assert.equal(created.patternProperties["^__proto__$"].const, "created");
+  assert.equal(deleted.patternProperties["^__proto__$"].const, "deleted");
+
+  const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
+  const validate = ajv.compile(result.schema);
+  assert.equal(validate(samples[0]), true);
+  assert.equal(validate(samples[1]), true);
+  assert.equal(validate(samples[2]), true);
+  assert.equal(validate(JSON.parse(`{"__proto__":"renamed","id":9}`)), false);
+  assert.equal(validate(JSON.parse(`{"id":9}`)), false);
+});
+
+test("a nested __proto__ discriminator pins const along the path", () => {
+  const samples = [
+    JSON.parse(`{"meta":{"__proto__":"a","v":1},"id":1}`),
+    JSON.parse(`{"meta":{"__proto__":"b","v":2},"id":2}`),
+  ];
+  const { schema } = buildVariantContract({ samples, pointer: "/meta/__proto__" });
+  assert.equal(schema.oneOf[0].properties.meta.properties.__proto__.const, "a");
+  assert.equal(
+    schema.oneOf[0].properties.meta.patternProperties["^__proto__$"].const,
+    "a"
+  );
+  assert.ok(schema.oneOf[0].properties.meta.required.includes("__proto__"));
+  const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
+  const validate = ajv.compile(schema);
+  assert.equal(validate(samples[0]), true);
+  assert.equal(validate(samples[1]), true);
+  assert.equal(
+    validate(JSON.parse(`{"meta":{"__proto__":"nope","v":1},"id":1}`)),
+    false
+  );
+});
+
+test("branches keep the inferred type of __proto__ fields inside array items", () => {
+  const samples = [
+    JSON.parse(`{"type":"a","events":[{"__proto__":"on","n":1}]}`),
+    JSON.parse(`{"type":"b","events":[{"__proto__":"off","n":2}]}`),
+  ];
+  const { schema } = buildVariantContract({ samples, pointer: "/type" });
+  const itemProps = schema.oneOf[0].properties.events.items.properties;
+  assert.equal(itemProps.__proto__.type, "string");
+  assert.deepEqual(schema.oneOf[0].properties.events.items.required, ["__proto__", "n"]);
+  const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
+  const validate = ajv.compile(schema);
+  assert.equal(validate(samples[0]), true);
+  assert.equal(validate(samples[1]), true);
+  assert.equal(
+    validate(JSON.parse(`{"type":"a","events":[{"__proto__":1,"n":1}]}`)),
+    false
+  );
+});
+
 test("the empty pointer addresses the root (scalar samples)", () => {
   const { schema, groupCount } = buildVariantContract({
     pointer: "",

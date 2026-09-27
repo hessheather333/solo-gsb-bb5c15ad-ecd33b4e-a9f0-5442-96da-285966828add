@@ -21,7 +21,7 @@ const MAX_SAMPLES = 200;
 
 const CATEGORIES = ["both", "baselineOnly", "currentOnly", "neither"];
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 
 function mapErrors(validate) {
   return (validate.errors || []).map((e) => ({

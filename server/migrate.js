@@ -52,7 +52,7 @@
 
 const Ajv2020 = require("ajv/dist/2020").default;
 const { parsePointer } = require("./variant");
-const { escapePointer } = require("./infer");
+const { escapePointer, setOwnKey } = require("./infer");
 
 const MAX_SAMPLES = 200;
 
@@ -65,7 +65,7 @@ const ARRAY_INDEX = /^(0|[1-9]\d*)$/;
 const MISSING = Symbol("missing");
 const UNSET = Symbol("unset");
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -170,7 +170,7 @@ function applyWrite(holder, segments, mappingIndex, value, written) {
       return `目标路径中途 ${displayPointer(segments.slice(0, i + 1))} 为标量，无法继续向下写入`;
     }
     if (!Object.prototype.hasOwnProperty.call(node, segment)) {
-      node[segment] = makeContainerFor(nextSegment);
+      setOwnKey(node, segment, makeContainerFor(nextSegment));
     }
     const child = node[segment];
     if (child === null || typeof child !== "object") {
@@ -200,7 +200,7 @@ function applyWrite(holder, segments, mappingIndex, value, written) {
     return `目标路径中途 ${displayPointer(segments.slice(0, -1)) || "(root)"} 为标量，无法继续向下写入`;
   } else {
     concrete = segments;
-    node[last] = value;
+    setOwnKey(node, last, value);
   }
 
   // Length-prefixed per-segment key, so a literal "a/b" key can never collide

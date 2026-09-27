@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { inferSchema } = require("../infer");
+const { buildVariantContract } = require("../variant");
 const { buildSlice, MAX_SAMPLES, MAX_POINTERS } = require("../slice");
 
 const ADDRESS_SAMPLES = [
@@ -226,6 +227,111 @@ test("buildSlice supports RFC 6901 escaping in pointers", () => {
   assert.deepEqual(out.pointers, ["/properties/a~1b"]);
   assert.deepEqual(Object.keys(out.schema.properties), ["a/b"]);
   assert.deepEqual(out.samples, [{ "a/b": "x" }]);
+});
+
+test("buildSlice keeps a __proto__ field with type, required and its projection", () => {
+  const samples = [
+    JSON.parse(`{"__proto__":"created","id":1}`),
+    JSON.parse(`{"__proto__":"deleted","id":2}`),
+  ];
+  const { schema } = inferSchema(samples);
+  const out = buildSlice({ schema, samples, pointers: ["/properties/__proto__"] });
+
+  assert.deepEqual(Object.keys(out.schema.properties), ["__proto__"]);
+  assert.deepEqual(out.schema.properties.__proto__, { type: "string" });
+  assert.deepEqual(out.schema.required, ["__proto__"]);
+  // The Ajv-only alias travels with the surviving field.
+  assert.deepEqual(out.schema.patternProperties["^__proto__$"], { type: "string" });
+  assert.deepEqual(out.samples, [
+    JSON.parse(`{"__proto__":"created"}`),
+    JSON.parse(`{"__proto__":"deleted"}`),
+  ]);
+  // The projected object stays a normal plain object carrying its own key.
+  assert.equal(Object.getPrototypeOf(out.samples[0]), Object.prototype);
+  assert.ok(Object.prototype.hasOwnProperty.call(out.samples[0], "__proto__"));
+});
+
+test("buildSlice keeps a const-pinned __proto__ inside a variant branch", () => {
+  const samples = [
+    JSON.parse(`{"__proto__":"created","id":1}`),
+    JSON.parse(`{"__proto__":"deleted","id":2}`),
+  ];
+  const { schema } = buildVariantContract({ samples, pointer: "/__proto__" });
+  const out = buildSlice({
+    schema: schema.oneOf[0],
+    samples: [samples[0]],
+    pointers: ["/properties/__proto__"],
+  });
+  assert.deepEqual(out.schema.properties.__proto__, { type: "string", const: "created" });
+  assert.deepEqual(out.schema.patternProperties["^__proto__$"], {
+    type: "string",
+    const: "created",
+  });
+  assert.deepEqual(out.samples, [JSON.parse(`{"__proto__":"created"}`)]);
+});
+
+test("buildSlice projects __proto__ through nested objects and array items", () => {
+  const samples = [
+    JSON.parse(`{"meta":{"__proto__":"a","keep":1},"list":[{"__proto__":"x","b":2}]}`),
+    JSON.parse(`{"meta":{"__proto__":"c","keep":3},"list":[{"__proto__":"y","b":4}]}`),
+  ];
+  const { schema } = inferSchema(samples);
+
+  const nested = buildSlice({
+    schema,
+    samples,
+    pointers: ["/properties/meta/properties/__proto__"],
+  });
+  assert.deepEqual(nested.schema.properties.meta.properties.__proto__, { type: "string" });
+  assert.deepEqual(nested.schema.properties.meta.required, ["__proto__"]);
+  assert.deepEqual(nested.samples, [
+    { meta: JSON.parse(`{"__proto__":"a"}`) },
+    { meta: JSON.parse(`{"__proto__":"c"}`) },
+  ]);
+
+  const items = buildSlice({
+    schema,
+    samples,
+    pointers: ["/properties/list/items/properties/__proto__"],
+  });
+  assert.deepEqual(items.schema.properties.list.items.properties.__proto__, {
+    type: "string",
+  });
+  assert.deepEqual(items.schema.properties.list.items.required, ["__proto__"]);
+  assert.deepEqual(items.samples, [
+    { list: [JSON.parse(`{"__proto__":"x"}`)] },
+    { list: [JSON.parse(`{"__proto__":"y"}`)] },
+  ]);
+
+  // A selected ancestor keeps the whole subtree, alias included.
+  const subtree = buildSlice({ schema, samples, pointers: ["/properties/meta"] });
+  assert.deepEqual(Object.keys(subtree.schema.properties.meta.properties), [
+    "__proto__",
+    "keep",
+  ]);
+  assert.deepEqual(subtree.schema.properties.meta.patternProperties["^__proto__$"], {
+    type: "string",
+  });
+  assert.deepEqual(subtree.samples, [
+    { meta: samples[0].meta },
+    { meta: samples[1].meta },
+  ]);
+});
+
+test("buildSlice rejects a wrongly typed projected __proto__ value", () => {
+  const { schema } = inferSchema([JSON.parse(`{"__proto__":"a","id":1}`)]);
+  assert.throws(
+    () =>
+      buildSlice({
+        schema,
+        samples: [JSON.parse(`{"__proto__":123,"id":1}`)],
+        pointers: ["/properties/__proto__"],
+      }),
+    (err) =>
+      err.status === 422 &&
+      err.details.failures.length === 1 &&
+      err.details.failures[0].errors.some((e) => e.keyword === "type")
+  );
 });
 
 test("buildSlice adds the 2020-12 $schema marker when the input lacks it", () => {

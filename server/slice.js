@@ -36,15 +36,22 @@
 
 const Ajv2020 = require("ajv/dist/2020").default;
 const { parsePointer } = require("./variant");
-const { escapePointer } = require("./infer");
+const {
+  escapePointer,
+  syncProtoPattern,
+  setOwnKey,
+  PROTO_KEY_PATTERN,
+} = require("./infer");
 
 const MAX_SAMPLES = 200;
 const MAX_POINTERS = 20;
 
+// ownProperties makes `required` use hasOwnProperty: a literal "__proto__"
+// key is otherwise read via the prototype getter and never reports missing.
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
+
 const POINTER_HINT =
   'JSON Pointer 须以 "/" 开头（空串 "" 表示根节点），"~" 仅允许写作 ~0（表示 ~）或 ~1（表示 /），并须指向 Schema 树中存在的节点（对象属性经 /properties/<键>、数组元素经 /items 逐段定位）';
-
-const ajv = new Ajv2020({ allErrors: true, strict: false });
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -121,14 +128,36 @@ function sliceNode(node, trie) {
   if (!isPlainSchema(node)) return clone(node); // defensive: boolean schema
   const out = {};
   for (const [keyword, value] of Object.entries(node)) {
-    if (keyword === "properties" || keyword === "required" || keyword === "items") continue;
+    // `properties`/`required`/`items` are sliced below; the "__proto__"
+    // companion inside `patternProperties` is rebuilt from the surviving
+    // `properties` entry instead of being copied through.
+    if (
+      keyword === "properties" ||
+      keyword === "required" ||
+      keyword === "items" ||
+      keyword === "patternProperties"
+    ) {
+      continue;
+    }
     out[keyword] = clone(value);
+  }
+  if (isPlainSchema(node.patternProperties)) {
+    const patternProperties = {};
+    for (const [pattern, child] of Object.entries(node.patternProperties)) {
+      if (pattern === PROTO_KEY_PATTERN) continue; // re-derived after slicing
+      // A user-authored schema could name a pattern "__proto__"; keep it safe.
+      setOwnKey(patternProperties, pattern, clone(child));
+    }
+    if (Object.keys(patternProperties).length > 0) out.patternProperties = patternProperties;
   }
   if (isPlainSchema(node.properties)) {
     const properties = {};
     for (const [key, child] of Object.entries(node.properties)) {
       const childTrie = trie.props.get(key);
-      if (childTrie) properties[key] = sliceNode(child, childTrie);
+      if (!childTrie) continue;
+      const sliced = sliceNode(child, childTrie);
+      // "__proto__" must become an own data property, not hit the setter.
+      setOwnKey(properties, key, sliced);
     }
     if (Object.keys(properties).length > 0) out.properties = properties;
     if (Array.isArray(node.required)) {
@@ -141,6 +170,8 @@ function sliceNode(node, trie) {
   if (trie.items && isPlainSchema(node.items)) {
     out.items = sliceNode(node.items, trie.items);
   }
+  // Re-add (or drop) the Ajv alias for a surviving (or removed) "__proto__".
+  syncProtoPattern(out);
   return out;
 }
 
@@ -161,7 +192,7 @@ function projectValue(value, trie) {
     const out = {};
     for (const key of Object.keys(value)) {
       const childTrie = trie.props.get(key);
-      if (childTrie) out[key] = projectValue(value[key], childTrie);
+      if (childTrie) setOwnKey(out, key, projectValue(value[key], childTrie));
     }
     return out;
   }

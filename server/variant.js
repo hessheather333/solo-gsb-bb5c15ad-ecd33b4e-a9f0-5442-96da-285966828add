@@ -20,7 +20,7 @@
  * with status 422 — the response still carries the grouping analysis.
  */
 
-const { inferSchema } = require("./infer");
+const { inferSchema, syncProtoPattern, isProtoKey, setOwnKey } = require("./infer");
 
 const MAX_SAMPLES = 200;
 
@@ -79,13 +79,23 @@ function resolvePointer(sample, segments) {
 function injectConst(schema, segments, value) {
   let node = schema;
   for (const segment of segments) {
-    if (!node.properties || typeof node.properties !== "object") node.properties = {};
-    if (!node.properties[segment] || typeof node.properties[segment] !== "object") {
-      node.properties[segment] = {};
+    if (!node.properties || typeof node.properties !== "object") {
+      node.properties = {};
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(node.properties, segment) ||
+      typeof node.properties[segment] !== "object" ||
+      node.properties[segment] === null
+    ) {
+      // defineProperty: a "__proto__" segment is an ordinary JSON key here.
+      setOwnKey(node.properties, segment, {});
     }
     const required = new Set(Array.isArray(node.required) ? node.required : []);
     required.add(segment);
     node.required = [...required];
+    // Pinning "__proto__" must reach the patternProperties alias Ajv
+    // actually enforces, not only the literal properties entry it skips.
+    if (isProtoKey(segment)) syncProtoPattern(node);
     node = node.properties[segment];
   }
   node.const = value;

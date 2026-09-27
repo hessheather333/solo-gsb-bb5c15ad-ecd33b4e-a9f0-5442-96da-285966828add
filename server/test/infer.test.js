@@ -2,7 +2,10 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const Ajv2020 = require("ajv/dist/2020").default;
 const { inferSchema } = require("../infer");
+
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 
 test("single object sample: types and required keys", () => {
   const { schema, paths } = inferSchema([{ id: 1, name: "Alice" }]);
@@ -81,6 +84,77 @@ test("root-level arrays and scalars are supported", () => {
 test("keys needing JSON Pointer escaping are escaped in sample paths", () => {
   const { paths } = inferSchema([{ "a/b": 1 }]);
   assert.deepEqual(paths["/properties/a~1b"], ["#/0/a~1b"]);
+});
+
+test("__proto__ is kept as a normal property with its type and required rule", () => {
+  // JSON.parse (like the HTTP body parser) stores "__proto__" as an own key.
+  const samples = [
+    JSON.parse(`{"__proto__":"created","id":1}`),
+    JSON.parse(`{"__proto__":"deleted","id":2}`),
+  ];
+  const { schema, paths } = inferSchema(samples);
+
+  assert.deepEqual(schema.required, ["__proto__", "id"]);
+  assert.deepEqual(Object.keys(schema.properties), ["__proto__", "id"]);
+  assert.equal(schema.properties.__proto__.type, "string");
+  assert.ok(Object.prototype.hasOwnProperty.call(schema.properties, "__proto__"));
+  assert.deepEqual(schema.properties.__proto__, { type: "string" });
+  assert.deepEqual(paths["/properties/__proto__"], ["#/0/__proto__", "#/1/__proto__"]);
+  // The schema serializes the field like any other key.
+  const reparsed = JSON.parse(JSON.stringify(schema));
+  assert.deepEqual(reparsed.properties.__proto__, { type: "string" });
+
+  // Ajv enforces the type (via the patternProperties alias) and requiredness.
+  const validate = ajv.compile(schema);
+  assert.equal(validate(samples[0]), true);
+  assert.equal(validate(samples[1]), true);
+  assert.equal(validate(JSON.parse(`{"__proto__":123,"id":3}`)), false);
+  assert.equal(validate(JSON.parse(`{"id":3}`)), false);
+  // Extra unknown keys stay allowed, as for any other property.
+  assert.equal(validate(JSON.parse(`{"__proto__":"created","id":1,"x":9}`)), true);
+});
+
+test("__proto__ works inside nested objects and array elements", () => {
+  const { schema } = inferSchema([
+    JSON.parse(`{"meta":{"__proto__":1},"list":[{"__proto__":"a"}]}`),
+    JSON.parse(`{"meta":{"__proto__":2},"list":[{"__proto__":"b"}]}`),
+  ]);
+  assert.equal(schema.properties.meta.properties.__proto__.type, "integer");
+  assert.deepEqual(schema.properties.meta.required, ["__proto__"]);
+  assert.equal(schema.properties.list.items.properties.__proto__.type, "string");
+  assert.deepEqual(schema.properties.list.items.required, ["__proto__"]);
+
+  const validate = ajv.compile(schema);
+  assert.equal(
+    validate(JSON.parse(`{"meta":{"__proto__":3},"list":[{"__proto__":"c"}]}`)),
+    true
+  );
+  assert.equal(
+    validate(JSON.parse(`{"meta":{"__proto__":"nope"},"list":[]}`)),
+    false
+  );
+  assert.equal(
+    validate(JSON.parse(`{"meta":{"__proto__":3},"list":[{"__proto__":1}]}`)),
+    false
+  );
+});
+
+test("__proto__ missing in one sample becomes optional, like any field", () => {
+  const { schema } = inferSchema([
+    JSON.parse(`{"__proto__":"a","id":1}`),
+    JSON.parse(`{"id":2}`),
+  ]);
+  assert.deepEqual(schema.required, ["id"]);
+  assert.equal(schema.properties.__proto__.type, "string");
+  const validate = ajv.compile(schema);
+  assert.equal(validate(JSON.parse(`{"id":2}`)), true);
+  assert.equal(validate(JSON.parse(`{"id":3,"__proto__":"b"}`)), true);
+});
+
+test("inference never pollutes Object.prototype through __proto__", () => {
+  inferSchema([JSON.parse(`{"__proto__":{"polluted":"yes"}}`)]);
+  assert.equal({}.polluted, undefined);
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
 });
 
 test("rejects empty sample list", () => {

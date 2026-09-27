@@ -28,8 +28,9 @@
 
 const Ajv2020 = require("ajv/dist/2020").default;
 const { coversType } = require("./diff");
+const { setOwnKey } = require("./infer");
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 
 // All JSON types; scalars first and most-specific first, so an `integer`
 // slot picks 0 even when `number` is also acceptable.
@@ -119,7 +120,7 @@ function genSatisfyingObject(acceptNode, rejectNode, omitKey = null) {
       ? propsReject[key]
       : {};
     try {
-      obj[key] = genValue(propsAccept[key], childReject);
+      setOwnKey(obj, key, genValue(propsAccept[key], childReject));
     } catch {
       // Drop the key; the final Ajv verification judges whether that is legal.
     }
@@ -149,19 +150,19 @@ function genPathObject(acceptNode, rejectNode, nextKey, nextValue) {
     const hasReject = Object.prototype.hasOwnProperty.call(propsReject, key);
     try {
       if (hasAccept && hasReject) {
-        obj[key] = genValue(propsAccept[key], propsReject[key]);
+        setOwnKey(obj, key, genValue(propsAccept[key], propsReject[key]));
       } else if (hasAccept) {
-        obj[key] = genValue(propsAccept[key], propsAccept[key]);
+        setOwnKey(obj, key, genValue(propsAccept[key], propsAccept[key]));
       } else if (hasReject) {
         // Only the rejecting side requires/knows it: the accept side does
         // not constrain this key, so a reject-valid placeholder suffices.
-        obj[key] = genValue(propsReject[key], propsReject[key]);
+        setOwnKey(obj, key, genValue(propsReject[key], propsReject[key]));
       }
     } catch {
       // Drop the key; the final Ajv verification catches an illegal drop.
     }
   }
-  obj[nextKey] = nextValue;
+  setOwnKey(obj, nextKey, nextValue);
   return obj;
 }
 

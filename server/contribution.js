@@ -24,7 +24,7 @@
  * A single analysis is capped at MAX_SAMPLES samples (N+1 inferences per run).
  */
 
-const { inferSchema, escapePointer } = require("./infer");
+const { inferSchema, escapePointer, setOwnKey } = require("./infer");
 
 const MAX_SAMPLES = 50;
 
@@ -53,7 +53,7 @@ function normalizeSchema(node) {
   if (properties && typeof properties === "object") {
     const sorted = {};
     for (const key of Object.keys(properties).sort()) {
-      sorted[key] = normalizeSchema(properties[key]);
+      setOwnKey(sorted, key, normalizeSchema(properties[key]));
     }
     out.properties = sorted;
   }

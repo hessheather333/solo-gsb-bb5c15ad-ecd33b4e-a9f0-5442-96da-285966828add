@@ -27,7 +27,7 @@
 
 const crypto = require("node:crypto");
 const { parsePointer } = require("./variant");
-const { escapePointer } = require("./infer");
+const { escapePointer, setOwnKey } = require("./infer");
 
 const MAX_SAMPLES = 200;
 const MAX_PATHS_PER_RULE = 50;
@@ -124,7 +124,10 @@ function pseudonym(pattern, value, attempt) {
 function setAtPath(container, segments, value) {
   let node = container;
   for (let i = 0; i < segments.length - 1; i += 1) node = node[segments[i]];
-  node[segments[segments.length - 1]] = value;
+  const last = segments[segments.length - 1];
+  // defineProperty: a "__proto__" segment is a normal JSON key, not the
+  // prototype slot (segments above it were resolved as own properties).
+  setOwnKey(node, last, value);
 }
 
 /**

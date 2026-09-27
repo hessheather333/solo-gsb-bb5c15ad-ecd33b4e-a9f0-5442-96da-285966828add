@@ -24,7 +24,7 @@ const Ajv2020 = require("ajv/dist/2020").default;
 
 const MAX_SAMPLES = 200;
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 
 // Keywords whose params take part in the cluster identity.
 const PARAM_KEYS = {
